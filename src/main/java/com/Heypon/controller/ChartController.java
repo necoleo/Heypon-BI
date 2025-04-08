@@ -1,11 +1,9 @@
 package com.Heypon.controller;
 
-import cn.hutool.json.JSONUtil;
-import com.Heypon.constant.FileConstant;
+import cn.hutool.core.io.FileUtil;
 import com.Heypon.manager.DeepSeekApiManager;
+import com.Heypon.manager.RedisLimiterManager;
 import com.Heypon.model.dto.chart.*;
-import com.Heypon.model.dto.file.UploadFileRequest;
-import com.Heypon.model.enums.FileUploadBizEnum;
 import com.Heypon.model.vo.BiResponse;
 import com.Heypon.utils.ExcelUtils;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
@@ -24,16 +22,13 @@ import com.Heypon.service.UserService;
 import javax.annotation.Resource;
 import javax.servlet.http.HttpServletRequest;
 import lombok.extern.slf4j.Slf4j;
-import org.apache.commons.lang3.RandomStringUtils;
 import org.apache.commons.lang3.StringUtils;
 import org.springframework.beans.BeanUtils;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
-
-import java.io.File;
-import java.io.FileNotFoundException;
 import java.io.IOException;
+import java.util.Arrays;
+import java.util.List;
 
 
 /**
@@ -53,6 +48,9 @@ public class ChartController {
 
     @Resource
     private DeepSeekApiManager deepSeekApi;
+
+    @Resource
+    private RedisLimiterManager redisLimiterManager;
 
     // region 增删改查
 
@@ -223,8 +221,8 @@ public class ChartController {
      * @return
      */
     @PostMapping("/gen")
-    public BaseResponse<BiResponse> getChartByAi(@RequestPart("file") MultipartFile multipartFile,
-                                             GenChartByAiRequest genChartByAiRequest, HttpServletRequest request) throws IOException {
+    public BaseResponse<BiResponse> genChartByAi(@RequestPart("file") MultipartFile multipartFile,
+                                                 GenChartByAiRequest genChartByAiRequest, HttpServletRequest request) throws IOException {
         // 需登录才能使用
         User loginUser = userService.getLoginUser(request);
         String chartName = genChartByAiRequest.getChartName();
@@ -234,6 +232,20 @@ public class ChartController {
         // 校验
         ThrowUtils.throwIf(StringUtils.isBlank(goal),ErrorCode.PARAMS_ERROR,"分析目标为空");
         ThrowUtils.throwIf(StringUtils.isNotBlank(chartName) && chartName.length() > 100, ErrorCode.PARAMS_ERROR, "图表名称过长");
+        ThrowUtils.throwIf(multipartFile == null || StringUtils.isBlank(multipartFile.getOriginalFilename()), ErrorCode.PARAMS_ERROR,"文件为空或文件名无效");
+        long fileSize = multipartFile.getSize();
+        final long ONE_MB = 1024 * 1024L;
+        // 校验文件大小
+        ThrowUtils.throwIf(fileSize > 50 * ONE_MB, ErrorCode.PARAMS_ERROR, String.format("上传文件过大，当前文件大小为 %.2f MB，最大允许上传 %d MB", (double)fileSize / ONE_MB, 50));
+        // 校验文件后缀
+        String originalFilename = multipartFile.getOriginalFilename();
+        String fileSuffix = FileUtil.getSuffix(originalFilename);
+        final List<String> validFileSuffixList = Arrays.asList("png", "jpg", "jpeg", "svg", "webp", "xls", "xlsx");
+        ThrowUtils.throwIf(StringUtils.isBlank(fileSuffix),ErrorCode.PARAMS_ERROR,"解析文件后缀失败");
+        ThrowUtils.throwIf(!validFileSuffixList.contains(fileSuffix), ErrorCode.PARAMS_ERROR, "文件类型非法");
+
+        // 限流判断, 每个用户一个限流器
+        redisLimiterManager.doRedisLimit("genChartByAi_" + loginUser.getId());
 
         // 用户输入
         StringBuilder userInput = new StringBuilder();
