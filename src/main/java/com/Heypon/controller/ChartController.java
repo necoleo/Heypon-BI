@@ -4,6 +4,7 @@ import cn.hutool.core.io.FileUtil;
 import com.Heypon.manager.DeepSeekApiManager;
 import com.Heypon.manager.RedisLimiterManager;
 import com.Heypon.model.dto.chart.*;
+import com.Heypon.model.enums.ChartStatusEnum;
 import com.Heypon.model.vo.BiResponse;
 import com.Heypon.utils.ExcelUtils;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
@@ -29,6 +30,9 @@ import org.springframework.web.multipart.MultipartFile;
 import java.io.IOException;
 import java.util.Arrays;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.ThreadPoolExecutor;
 
 
 /**
@@ -51,6 +55,9 @@ public class ChartController {
 
     @Resource
     private RedisLimiterManager redisLimiterManager;
+
+    @Resource
+    private ThreadPoolExecutor threadPoolExecutor;
 
     // region 增删改查
 
@@ -240,7 +247,7 @@ public class ChartController {
         // 校验文件后缀
         String originalFilename = multipartFile.getOriginalFilename();
         String fileSuffix = FileUtil.getSuffix(originalFilename);
-        final List<String> validFileSuffixList = Arrays.asList("png", "jpg", "jpeg", "svg", "webp", "xls", "xlsx");
+        final List<String> validFileSuffixList = Arrays.asList("xls", "xlsx");
         ThrowUtils.throwIf(StringUtils.isBlank(fileSuffix),ErrorCode.PARAMS_ERROR,"解析文件后缀失败");
         ThrowUtils.throwIf(!validFileSuffixList.contains(fileSuffix), ErrorCode.PARAMS_ERROR, "文件类型非法");
 
@@ -260,35 +267,74 @@ public class ChartController {
         userInput.append("原始数据：").append("\n");
         userInput.append(chartData).append("\n");
 
-        // 调用AI
-        String result = deepSeekApi.doChat(userInput.toString());
-
-        // 整理AI返回的数据
-        String[] splitsRes = result.split("【【【【【");
-        if (splitsRes.length < 3){
-            throw new BusinessException(ErrorCode.SYSTEM_ERROR,"AI 生成错误");
-        }
-        String genChart = splitsRes[1].trim();
-        String genResult = splitsRes[2].trim();
-
         // 将生成的信息插入数据库
         Chart chart = new Chart();
         chart.setChartName(chartName);
         chart.setGoal(goal);
         chart.setChartType(chartType);
         chart.setChartData(chartData);
-        chart.setGenChart(genChart);
-        chart.setGenResult(genResult);
         chart.setUserId(loginUser.getId());
-
+        chart.setChartStatus(ChartStatusEnum.WAIT);
         boolean saveResult = chartService.save(chart);
         ThrowUtils.throwIf(!saveResult, ErrorCode.SYSTEM_ERROR,"图表信息保存失败");
 
+        try{
+            // 提交任务
+            CompletableFuture.runAsync(() -> {
+                //先修改图表任务状态为 执行中
+                Chart updateChart = new Chart();
+                updateChart.setId(chart.getId());
+                updateChart.setChartStatus(ChartStatusEnum.RUNNING);
+                boolean updateRes = chartService.updateById(updateChart);
+                if (!updateRes){
+                    handleUpdateChartStatusError(chart.getId(), "更新图表执行中状态失败");
+                    return;
+                }
+
+                // 调用AI
+                String result = deepSeekApi.doChat(userInput.toString());
+                // 整理AI返回的数据
+                String[] splitsRes = result.split("【【【【【");
+                if (splitsRes.length < 3){
+                    handleUpdateChartStatusError(chart.getId(), "AI 生成错误" );
+                    return;
+                }
+                String genChart = splitsRes[1].trim();
+                String genResult = splitsRes[2].trim();
+                Chart updateChartResult = new Chart();
+                updateChartResult.setId(chart.getId());
+                updateChartResult.setChartStatus(ChartStatusEnum.SUCCEED);
+                updateChartResult.setGenChart(genChart);
+                updateChartResult.setGenResult(genResult);
+                boolean SaveChartRes = chartService.updateById(updateChartResult);
+                if (!SaveChartRes){
+                    handleUpdateChartStatusError(chart.getId(), "更新图表成功状态失败");
+                }
+            },threadPoolExecutor).exceptionally(ex -> {
+                // 处理异步任务异常
+                log.error("异步任务执行失败", ex);
+                return null;
+            });
+        }catch (RejectedExecutionException e){
+            // 处理任务队列满的异常
+            log.error("任务队列已满，无法提交新任务", e);
+            throw new BusinessException(ErrorCode.TOO_MANY_REQUEST, "请求过于频繁，请稍后再试");
+        }
         BiResponse biResponse = new BiResponse();
-        biResponse.setGenChart(genChart);
-        biResponse.setGenResult(genResult);
         biResponse.setChartId(chart.getId());
 
         return ResultUtils.success(biResponse);
     }
+
+    private void handleUpdateChartStatusError(long chartId, String execMessage) {
+        Chart updateChart = new Chart();
+        updateChart.setId(chartId);
+        updateChart.setChartStatus(ChartStatusEnum.FAILED);
+        boolean updateRes = chartService.updateById(updateChart);
+        if (!updateRes){
+            log.error("更新图表失败状态失败，" + chartId + ", " + execMessage);
+        }
+    }
+
+
 }

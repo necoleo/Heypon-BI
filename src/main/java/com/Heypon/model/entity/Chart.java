@@ -1,5 +1,6 @@
 package com.Heypon.model.entity;
 
+import com.Heypon.model.enums.ChartStatusEnum;
 import com.baomidou.mybatisplus.annotation.*;
 import lombok.Data;
 
@@ -53,6 +54,17 @@ public class Chart implements Serializable {
      * 生成的分析结论
      */
     private String genResult;
+
+    /**
+     * 图表状态
+     */
+    private ChartStatusEnum chartStatus;
+
+    /**
+     * 执行信息
+     */
+    private String execMessage;
+
     /**
      * 创建时间
      */

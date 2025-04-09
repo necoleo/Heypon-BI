@@ -13,13 +13,15 @@
             <result property="chartType" column="chartType" jdbcType="VARCHAR"/>
             <result property="genChart" column="genChart" jdbcType="VARCHAR"/>
             <result property="genResult" column="genResult" jdbcType="VARCHAR"/>
+            <result property="chartStatus" column="chartStatus" jdbcType="VARCHAR"/>
+            <result property="execMessage" column="execMessage" jdbcType="LONGVARCHAR"/>
             <result property="createTime" column="createTime" jdbcType="TIMESTAMP"/>
             <result property="updateTime" column="updateTime" jdbcType="TIMESTAMP"/>
             <result property="isDelete" column="isDelete" jdbcType="TINYINT"/>
     </resultMap>
 
     <sql id="Base_Column_List">
-        id,userId,chartName,goal,chartData,chartType,genChart,genResult,
+        id,userId,chartName,goal,chartData,chartType,genChart,genResult,chartStatus,execMessage
         createTime,updateTime,isDelete
     </sql>
 </mapper>
