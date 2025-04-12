@@ -1,6 +1,7 @@
 package com.Heypon.controller;
 
 import cn.hutool.core.io.FileUtil;
+import com.Heypon.bizmq.BiProducer;
 import com.Heypon.manager.DeepSeekApiManager;
 import com.Heypon.manager.RedisLimiterManager;
 import com.Heypon.model.dto.chart.*;
@@ -28,6 +29,7 @@ import org.springframework.beans.BeanUtils;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 import java.io.IOException;
+import java.net.BindException;
 import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
@@ -58,6 +60,9 @@ public class ChartController {
 
     @Resource
     private ThreadPoolExecutor threadPoolExecutor;
+
+    @Resource
+    private BiProducer biProducer;
 
     // region 增删改查
 
@@ -221,7 +226,7 @@ public class ChartController {
 
     /**
      * 智能分析
-     *
+     * 利用异步化和消息队列调用 AI 接口
      * @param multipartFile
      * @param genChartByAiRequest
      * @param request
@@ -254,18 +259,8 @@ public class ChartController {
         // 限流判断, 每个用户一个限流器
         redisLimiterManager.doRedisLimit("genChartByAi_" + loginUser.getId());
 
-        // 用户输入
-        StringBuilder userInput = new StringBuilder();
-        userInput.append("分析需求：").append("\n");
-        String goalAndType = goal;
-        if (StringUtils.isNotBlank(chartType)) {
-            goalAndType += "，使用" + chartType;
-        }
-        userInput.append(goalAndType).append("\n");
-        // 压缩后的数据
-        String chartData =  ExcelUtils.excelToCsv(multipartFile);
-        userInput.append("原始数据：").append("\n");
-        userInput.append(chartData).append("\n");
+        // 将 excel 转为 csv
+        String chartData = ExcelUtils.excelToCsv(multipartFile);
 
         // 将生成的信息插入数据库
         Chart chart = new Chart();
@@ -278,63 +273,17 @@ public class ChartController {
         boolean saveResult = chartService.save(chart);
         ThrowUtils.throwIf(!saveResult, ErrorCode.SYSTEM_ERROR,"图表信息保存失败");
 
-        try{
-            // 提交任务
-            CompletableFuture.runAsync(() -> {
-                //先修改图表任务状态为 执行中
-                Chart updateChart = new Chart();
-                updateChart.setId(chart.getId());
-                updateChart.setChartStatus(ChartStatusEnum.RUNNING);
-                boolean updateRes = chartService.updateById(updateChart);
-                if (!updateRes){
-                    handleUpdateChartStatusError(chart.getId(), "更新图表执行中状态失败");
-                    return;
-                }
+        Long newChartId = chart.getId();
 
-                // 调用AI
-                String result = deepSeekApi.doChat(userInput.toString());
-                // 整理AI返回的数据
-                String[] splitsRes = result.split("【【【【【");
-                if (splitsRes.length < 3){
-                    handleUpdateChartStatusError(chart.getId(), "AI 生成错误" );
-                    return;
-                }
-                String genChart = splitsRes[1].trim();
-                String genResult = splitsRes[2].trim();
-                Chart updateChartResult = new Chart();
-                updateChartResult.setId(chart.getId());
-                updateChartResult.setChartStatus(ChartStatusEnum.SUCCEED);
-                updateChartResult.setGenChart(genChart);
-                updateChartResult.setGenResult(genResult);
-                boolean SaveChartRes = chartService.updateById(updateChartResult);
-                if (!SaveChartRes){
-                    handleUpdateChartStatusError(chart.getId(), "更新图表成功状态失败");
-                }
-            },threadPoolExecutor).exceptionally(ex -> {
-                // 处理异步任务异常
-                log.error("异步任务执行失败", ex);
-                return null;
-            });
-        }catch (RejectedExecutionException e){
-            // 处理任务队列满的异常
-            log.error("任务队列已满，无法提交新任务", e);
-            throw new BusinessException(ErrorCode.TOO_MANY_REQUEST, "请求过于频繁，请稍后再试");
+        try{
+            biProducer.sendMessage(String.valueOf(newChartId));
+        }catch (Exception e){
+            log.error("发送消息到队列失败， chartId: {}", newChartId, e);
+            throw new BusinessException(ErrorCode.SYSTEM_ERROR, "发送消息到队列失败");
         }
         BiResponse biResponse = new BiResponse();
-        biResponse.setChartId(chart.getId());
+        biResponse.setChartId(newChartId);
 
         return ResultUtils.success(biResponse);
     }
-
-    private void handleUpdateChartStatusError(long chartId, String execMessage) {
-        Chart updateChart = new Chart();
-        updateChart.setId(chartId);
-        updateChart.setChartStatus(ChartStatusEnum.FAILED);
-        boolean updateRes = chartService.updateById(updateChart);
-        if (!updateRes){
-            log.error("更新图表失败状态失败，" + chartId + ", " + execMessage);
-        }
-    }
-
-
 }

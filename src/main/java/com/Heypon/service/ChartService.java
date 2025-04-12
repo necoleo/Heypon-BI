@@ -4,6 +4,7 @@ import com.Heypon.model.dto.chart.ChartQueryRequest;
 import com.Heypon.model.entity.Chart;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.extension.service.IService;
+import org.springframework.web.multipart.MultipartFile;
 
 /**
 * @author 92700
