@@ -1,6 +1,9 @@
 package com.Heypon.bizmq;
 
 import com.Heypon.constant.BiMqConstant;
+import org.springframework.amqp.core.Message;
+import org.springframework.amqp.core.MessageDeliveryMode;
+import org.springframework.amqp.core.MessageProperties;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.stereotype.Component;
 
@@ -20,6 +23,14 @@ public class BiProducer {
      * @param message
      */
     public void sendMessage(String message) {
-        rabbitTemplate.convertAndSend(BiMqConstant.BI_EXCHANGE_NAME, BiMqConstant.BI_ROUTING_KEY, message);
+        // 设置消息参数
+        MessageProperties messageProperties = new MessageProperties();
+        // 消息持久化
+        messageProperties.setDeliveryMode(MessageDeliveryMode.PERSISTENT);
+        // 构建消息体
+        Message produceMessage = new Message(message.getBytes(), messageProperties);
+        rabbitTemplate.convertAndSend(BiMqConstant.BI_EXCHANGE_NAME, BiMqConstant.BI_ROUTING_KEY, produceMessage);
     }
+
+
 }

@@ -51,8 +51,14 @@ public class BiConsumer {
     @RabbitListener(queues = {BiMqConstant.BI_QUEUE_NAME}, ackMode = "MANUAL")
     public void receiveMessage(String message, Channel channel,@Header(AmqpHeaders.DELIVERY_TAG) long deliveryTag) {
         log.info("接收到消息， chartId = {}", message);
+        long chartId;
+        try{
+            chartId = Long.parseLong(message);
+        }catch (Exception e){
+            channel.basicNack(deliveryTag, false,false);
+            throw new BusinessException(ErrorCode.SYSTEM_ERROR, "无法解析消息，消息处理失败");
+        }
 
-        long chartId = Long.parseLong(message);
         Chart chart = chartService.getById(chartId);
 
         if (chart == null) {
@@ -61,6 +67,7 @@ public class BiConsumer {
         }
         // 提交异步任务处理消息
         CompletableFuture.runAsync(() -> {
+            log.info("{} 接手处理", Thread.currentThread().getName());
             boolean processResult = processChart(chart);
             ThrowUtils.throwIf(!processResult,ErrorCode.SYSTEM_ERROR, "调用AI接口失败");
             // 消息处理成功，确认消息
