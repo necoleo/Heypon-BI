@@ -82,7 +82,7 @@ knife4j:
         api-rule: package
         api-rule-resources:
           - com.Heypon.controller
-          -
+
 # Deepseek api key
 deepseek:
   apiKey: xxx
